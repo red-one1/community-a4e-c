@@ -172,6 +172,9 @@ local afcs_yaw_servo_current_wma = WMA_wrap(0.1, 0.0, -1.0, 1.0)
 local afcs_pitch_servo_current_wma = WMA_wrap(0.1, 0.0, -1.0, 1.0)
 
 local afcs_trim_actuated = false
+local afcs_css_ignore_time = 0
+local afcs_last_pitch_trim = 0
+local afcs_last_roll_trim = 0
 
 
 --AFCS State information
@@ -799,30 +802,38 @@ end
 
 --Switch between these if the user is using FFB.
 DEFAULT_CSS_DEFLECTION = 0.03
-FFB_CSS_DEFLECTION = optionsData_ffbCSSActivate or 0.15
+FFB_CSS_DEFLECTION_ENTER = optionsData_ffbCSSActivate or 0.10
+FFB_CSS_DEFLECTION_EXIT = 0.04
+CSS_IGNORE_TIME_AFTER_TRIM = 0.5
 
 function afcs_check_for_css()
 
-    local required_css_deflection = DEFAULT_CSS_DEFLECTION
+    local using_ffb = (efm_data_bus.fm_getUsingFFB() == 1.0)
+    local enter_threshold = DEFAULT_CSS_DEFLECTION
+    local exit_threshold = DEFAULT_CSS_DEFLECTION
+    local skip_entry = false
 
-    if efm_data_bus.fm_getUsingFFB() == 1.0 then
-        required_css_deflection = FFB_CSS_DEFLECTION
+    if using_ffb then
+        enter_threshold = FFB_CSS_DEFLECTION_ENTER
+        exit_threshold = FFB_CSS_DEFLECTION_EXIT
+        skip_entry = afcs_css_ignore_time > 0
     end
 
-    if math.abs(efm_data_bus.fm_getPitchInput()) > required_css_deflection or math.abs(efm_data_bus.fm_getRollInput()) > required_css_deflection  then
-        afcs_css_enabled = true
-        dev:performClickableAction(device_commands.afcs_hdg_sel,0,false)
-        dev:performClickableAction(device_commands.afcs_alt,0,false)
-    else
-        --We must try and disengage the css mode.
-        --We must check if this is allowed so disable afcs_ccs_enabled to check the state.
-        afcs_css_enabled = false
+    local stick_deflection = math.max(math.abs(efm_data_bus.fm_getPitchInput()), math.abs(efm_data_bus.fm_getRollInput()))
 
-        --If we cannot disable the css mode then we most go back to css.
-        if not afcs_check_engage_params() then
+    if afcs_css_enabled then
+        if stick_deflection <= exit_threshold and afcs_check_engage_params() then
+            afcs_css_enabled = false
+        end
+    else
+        if not skip_entry and stick_deflection > enter_threshold then
             afcs_css_enabled = true
         end
+    end
 
+    if afcs_css_enabled then
+        dev:performClickableAction(device_commands.afcs_hdg_sel,0,false)
+        dev:performClickableAction(device_commands.afcs_alt,0,false)
     end
 end
 
@@ -888,6 +899,19 @@ function update_afcs()
 
     afcs_check_switches()
     local temp_state = afcs_get_current_state()
+
+    -- Debounce CSS entry after AFCS moves trim (FFB centers shift with trim)
+    if afcs_css_ignore_time > 0 then
+        afcs_css_ignore_time = math.max(0, afcs_css_ignore_time - update_time_step)
+    end
+
+    local current_pitch_trim_val = pitch_trim_handle:get()
+    local current_roll_trim_val = roll_trim_handle:get()
+    if math.abs(current_pitch_trim_val - afcs_last_pitch_trim) > 0.0001 or math.abs(current_roll_trim_val - afcs_last_roll_trim) > 0.0001 then
+        afcs_css_ignore_time = CSS_IGNORE_TIME_AFTER_TRIM
+    end
+    afcs_last_pitch_trim = current_pitch_trim_val
+    afcs_last_roll_trim = current_roll_trim_val
 
     --State change
     if temp_state ~= afcs_state then
