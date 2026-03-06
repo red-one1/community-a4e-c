@@ -808,18 +808,23 @@ CSS_IGNORE_TIME_AFTER_TRIM = 0.5
 
 function afcs_check_for_css()
 
+    local was_css_enabled = afcs_css_enabled
     local using_ffb = (efm_data_bus.fm_getUsingFFB() == 1.0)
     local enter_threshold = DEFAULT_CSS_DEFLECTION
     local exit_threshold = DEFAULT_CSS_DEFLECTION
     local skip_entry = false
+    local pitch_input = efm_data_bus.fm_getPitchInput()
+    local roll_input = efm_data_bus.fm_getRollInput()
 
     if using_ffb then
         enter_threshold = FFB_CSS_DEFLECTION_ENTER
         exit_threshold = FFB_CSS_DEFLECTION_EXIT
         skip_entry = afcs_css_ignore_time > 0
+        pitch_input = pitch_input - pitch_trim_handle:get()
+        roll_input = roll_input - roll_trim_handle:get()
     end
 
-    local stick_deflection = math.max(math.abs(efm_data_bus.fm_getPitchInput()), math.abs(efm_data_bus.fm_getRollInput()))
+    local stick_deflection = math.max(math.abs(pitch_input), math.abs(roll_input))
 
     if afcs_css_enabled then
         if stick_deflection <= exit_threshold and afcs_check_engage_params() then
@@ -829,6 +834,12 @@ function afcs_check_for_css()
         if not skip_entry and stick_deflection > enter_threshold then
             afcs_css_enabled = true
         end
+    end
+
+    if not was_css_enabled and afcs_css_enabled then
+        print_message_to_user("AFCS CSS ENGAGED")
+    elseif was_css_enabled and not afcs_css_enabled then
+        print_message_to_user("AFCS CSS DISENGAGED")
     end
 
     if afcs_css_enabled then
